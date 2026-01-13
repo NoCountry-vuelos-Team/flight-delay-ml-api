@@ -13,7 +13,12 @@ app = FastAPI(title="Flight Delay Predictor API")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
-MODEL_DIR = os.path.join(BASE_DIR, "Modelo")
+MODEL_DIR = os.path.join(BASE_DIR, "model")
+
+modelo = joblib.load(
+    os.path.join(MODEL_DIR, "modelo_flight_on_time.pkl")
+)
+
 
 #Cargar .pkl
 aerolinea_delay_rate = joblib.load(
