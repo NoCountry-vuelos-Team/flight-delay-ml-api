@@ -1,6 +1,6 @@
 
 # Importación de bibliotecas
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
 import joblib
@@ -9,16 +9,15 @@ import numpy as np
 
 app = FastAPI(title="Flight Delay Predictor API")
 
-# Rutas 
+# Rutas
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
 MODEL_DIR = os.path.join(BASE_DIR, "model")
 
+# Cargar modelo (UNA sola vez)
 modelo = joblib.load(
     os.path.join(MODEL_DIR, "modelo_flight_on_time.pkl")
 )
-
 
 #Cargar .pkl
 aerolinea_delay_rate = joblib.load(
@@ -37,9 +36,6 @@ global_delay_rate = joblib.load(
     os.path.join(ARTIFACTS_DIR, "global_delay_rate.pkl")
 )
 
-modelo = joblib.load(
-    os.path.join(MODEL_DIR, "modelo_FlightOnTime.pkl")
-)
 
 # Transformacion de features
 
@@ -83,50 +79,47 @@ class FlightInput(BaseModel):
     fecha_partida: datetime
     distancia_km: float
 
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": "1.0"}
 
-import numpy as np
 
-@app.post("/predict")
+@app.post("/v1/predict")
 def predict(data: FlightInput):
+    try:
+        aerolinea_rate = aerolinea_delay_rate.get(
+            data.aerolinea, global_delay_rate
+        )
+        origen_rate = origen_delay_rate.get(
+            data.origen, global_delay_rate
+        )
+        destino_rate = destino_delay_rate.get(
+            data.destino, global_delay_rate
+        )
 
-    # 1️⃣ Delay rates (con fallback)
-    aerolinea_rate = aerolinea_delay_rate.get(
-        data.aerolinea, global_delay_rate
-    )
+        fin_semana_y_noche = es_fin_semana_y_noche(data.fecha_partida)
+        bloque_horario = obtener_bloque_horario(data.fecha_partida)
+        bloque_risk = BLOQUE_RISK_MAP[bloque_horario]
 
-    origen_rate = origen_delay_rate.get(
-        data.origen, global_delay_rate
-    )
+        X = np.array([[ 
+            aerolinea_rate,
+            fin_semana_y_noche,
+            bloque_risk,
+            data.distancia_km,
+            origen_rate,
+            destino_rate
+        ]])
 
-    destino_rate = destino_delay_rate.get(
-        data.destino, global_delay_rate
-    )
+        proba = modelo.predict_proba(X)[0][1]
+        pred = int(proba >= 0.5)
 
-    # 2️⃣ Features temporales
-    fin_semana_y_noche = es_fin_semana_y_noche(data.fecha_partida)
+        return {
+            "prevision": "Retrasado" if pred == 1 else "A tiempo",
+            "probabilidad": round(float(proba), 2)
+        }
 
-    bloque_horario = obtener_bloque_horario(data.fecha_partida)
-    bloque_risk = BLOQUE_RISK_MAP[bloque_horario]
-
-    # 3️⃣ Construir input del modelo (2D, orden EXACTO)
-    X = np.array([[
-        aerolinea_rate,
-        fin_semana_y_noche,
-        bloque_risk,
-        data.distancia_km,
-        origen_rate,
-        destino_rate
-    ]])
-
-    # 4️⃣ Predicción
-    proba = modelo.predict_proba(X)[0][1]
-    pred = int(proba >= 0.5)
-
-    # 5️⃣ Respuesta final
-    return {
-        "prevision": "Retrasado" if pred == 1 else "A tiempo",
-        "probabilidad": round(float(proba), 2)
-    }
-
-
-
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="prediction_failed"
+        )
